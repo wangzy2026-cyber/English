@@ -43,10 +43,6 @@ st.markdown("""
     .en-font { font-size: 60px; font-weight: bold; color: #3C3B6E; margin: 5px 0; }
     .cn-font { font-size: 32px; color: #B22234; font-weight: bold; }
     audio { display: block; margin: 15px auto; width: 260px; }
-    .custom-btn {
-        width: 100%; padding: 10px; border-radius: 10px; border: 1px solid #ddd;
-        background: #f9f9f9; color: #444; font-weight: bold; cursor: pointer;
-    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -54,26 +50,25 @@ st.markdown("""
 if 'step' not in st.session_state:
     st.session_state.step = 0
     st.session_state.current_data = None
+    st.session_state.last_audio_nonce = ""
 
 # 5. 核心逻辑
 col1, col2, col3 = st.columns([1, 1, 1])
 with col2:
     if st.button("🇺🇸"):
         st.session_state.step = 1
+        st.session_state.last_audio_nonce = str(time.time()).replace(".", "") # 生成全新 ID
         icon = random.choice(ALL_EMOJIS)
         
         try:
-            # 强化提示词：要求涵盖多种词性，并保持健康内容
             response = client.chat.completions.create(
                 model="deepseek-chat",
                 messages=[{
                     "role": "user", 
                     "content": f"""Based on the symbol '{icon}':
-                    1. STRICTLY FILTER out any content related to politics, gender controversy (e.g., pregnant men), LGBTQ+, violence, or adult topics. Return 'SKIP|SKIP|SKIP' if found.
-                    2. Otherwise, randomly pick ONE English word related to this emoji. 
-                    3. The word can be a Noun, Verb, Adjective, or Adverb (mix them up!).
-                    Format: Word|Part of Speech|Chinese Meaning
-                    Example: Run|Verb|跑"""
+                    1. STRICTLY FILTER out any content related to politics, gender controversy, LGBTQ+, violence, or adult topics. Return 'SKIP|SKIP|SKIP' if found.
+                    2. Otherwise, randomly pick ONE English word related to this emoji (Noun, Verb, Adjective, or Adverb).
+                    Format: Word|Part of Speech|Chinese Meaning"""
                 }],
                 timeout=8
             )
@@ -95,7 +90,7 @@ with col2:
 if st.session_state.step >= 1 and st.session_state.current_data:
     data = st.session_state.current_data
     
-    # 展示图标、词性和英文
+    # 展示图标和英文
     st.markdown(f'''
         <div class="result-container">
             <div class="emoji-font">{data["icon"]}</div>
@@ -104,24 +99,35 @@ if st.session_state.step >= 1 and st.session_state.current_data:
         </div>
     ''', unsafe_allow_html=True)
     
-    # 语音
+    # --- 修复 Bug 的关键：音频容器 ---
+    audio_container = st.empty()
+    
     if st.session_state.step == 1:
-        nonce = str(time.time()).replace(".", "")
-        b64_str = asyncio.run(get_voice_b64(data["word"]))
-        audio_html = f'''
-            <div style="display: flex; justify-content: center;">
-                <audio controls autoplay id="audio_{nonce}">
-                    <source src="data:audio/mp3;base64,{b64_str}" type="audio/mp3">
-                </audio>
-            </div>
-            <script>setTimeout(() => {{ document.getElementById('audio_{nonce}').play(); }}, 200);</script>
-        '''
-        st.markdown(audio_html, unsafe_allow_html=True)
+        with st.spinner("Loading audio..."):
+            b64_str = asyncio.run(get_voice_b64(data["word"]))
+            nonce = st.session_state.last_audio_nonce
+            
+            # 使用带有唯一 ID 的 HTML，并增加一个自动销毁旧播放器的脚本
+            audio_html = f'''
+                <div style="display: flex; justify-content: center;" id="container_{nonce}">
+                    <audio controls autoplay id="audio_{nonce}">
+                        <source src="data:audio/mp3;base64,{b64_str}" type="audio/mp3">
+                    </audio>
+                </div>
+                <script>
+                    // 确保页面上只存在当前的播放器
+                    var currentAudio = document.getElementById('audio_{nonce}');
+                    if (currentAudio) {{
+                        currentAudio.play().catch(e => console.log("Audio play blocked"));
+                    }}
+                </script>
+            '''
+            audio_container.markdown(audio_html, unsafe_allow_html=True)
         
         if st.button("Reveal Meaning (显示中文)"):
             st.session_state.step = 2
             st.rerun()
 
-    # 中文
+    # 中文展示
     if st.session_state.step == 2:
         st.markdown(f'<div class="result-container"><div class="cn-font">{data["cn"]}</div></div>', unsafe_allow_html=True)
