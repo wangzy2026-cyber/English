@@ -16,7 +16,6 @@ client = OpenAI(
 ALL_EMOJIS = list(emoji.EMOJI_DATA.keys())
 
 async def get_voice_b64(text):
-    # 如果语音也卡顿，可以尝试微调语速
     communicate = edge_tts.Communicate(text, "en-US-GuyNeural", rate="+0%")
     audio_data = b""
     async for chunk in communicate.stream():
@@ -52,43 +51,42 @@ if 'step' not in st.session_state:
     st.session_state.current_data = None
     st.session_state.last_audio_nonce = ""
 
-# 5. 核心逻辑（带重试机制）
+# 5. 核心逻辑（强化联想 & 修复漏词）
 col1, col2, col3 = st.columns([1, 1, 1])
 with col2:
     if st.button("🇺🇸"):
         st.session_state.step = 1
         st.session_state.last_audio_nonce = str(time.time()).replace(".", "")
         
-        # 尝试最多 3 次请求
-        max_retries = 3
         success = False
-        
-        for i in range(max_retries):
+        # 增加尝试次数，确保一定能抽到一个有词的
+        for _ in range(5): 
             icon = random.choice(ALL_EMOJIS)
             try:
+                # 提示词微调：要求针对 Emoji 给出更有意义的单词
                 response = client.chat.completions.create(
                     model="deepseek-chat",
                     messages=[{
                         "role": "user", 
-                        "content": f"Symbol '{icon}': Filter NSFW/Politics/Gender/Violence. Return EnglishWord|PartOfSpeech|ChineseMeaning. Mix Noun/Verb/Adj/Adv."
+                        "content": f"Symbol '{icon}': Strictly filter NSFW/Politics/Violence. Based on the symbol, provide ONE healthy English word (Noun/Verb/Adj/Adv) that a middle schooler should learn. Format: Word|PartOfSpeech|ChineseMeaning"
                     }],
-                    timeout=5 # 缩短单次超时时间，快进快出
+                    timeout=5
                 )
                 res = response.choices[0].message.content.strip().split("|")
                 
-                if len(res) >= 3 and "SKIP" not in res[0]:
+                # 确保返回了有效数据且不是 SKIP
+                if len(res) >= 3 and res[0].strip() and "SKIP" not in res[0].upper():
                     st.session_state.current_data = {
                         "icon": icon, "word": res[0].strip(), 
                         "type": res[1].strip(), "cn": res[2].strip()
                     }
                     success = True
                     break
-            except Exception:
-                time.sleep(0.5) # 稍微等半秒再试
+            except:
                 continue
         
         if not success:
-            st.warning("DeepSeek 拥挤中，请再点一次试试 🇺🇸")
+            st.warning("DeepSeek 暂时走神了，再点一次 🇺🇸")
 
 # 渲染
 if st.session_state.step >= 1 and st.session_state.current_data:
@@ -115,13 +113,13 @@ if st.session_state.step >= 1 and st.session_state.current_data:
                     </audio>
                 </div>
                 <script>
-                    var currentAudio = document.getElementById('audio_{nonce}');
-                    if (currentAudio) {{ currentAudio.play().catch(e => {{}}); }}
+                    var a = document.getElementById('audio_{nonce}');
+                    if (a) {{ a.play().catch(e => {{}}); }}
                 </script>
             '''
             audio_container.markdown(audio_html, unsafe_allow_html=True)
         except:
-            st.info("语音正在赶来...")
+            st.info("Reading...")
         
         if st.button("Reveal Meaning (显示中文)"):
             st.session_state.step = 2
