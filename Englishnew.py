@@ -16,6 +16,7 @@ client = OpenAI(
 ALL_EMOJIS = list(emoji.EMOJI_DATA.keys())
 
 async def get_voice_b64(text):
+    # 如果语音也卡顿，可以尝试微调语速
     communicate = edge_tts.Communicate(text, "en-US-GuyNeural", rate="+0%")
     audio_data = b""
     async for chunk in communicate.stream():
@@ -23,7 +24,7 @@ async def get_voice_b64(text):
             audio_data += chunk["data"]
     return base64.b64encode(audio_data).decode()
 
-# 3. 样式升级
+# 3. 样式
 st.set_page_config(page_title="English Master", page_icon="🇺🇸")
 st.markdown("""
     <style>
@@ -46,51 +47,53 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# 4. 初始化状态
 if 'step' not in st.session_state:
     st.session_state.step = 0
     st.session_state.current_data = None
     st.session_state.last_audio_nonce = ""
 
-# 5. 核心逻辑
+# 5. 核心逻辑（带重试机制）
 col1, col2, col3 = st.columns([1, 1, 1])
 with col2:
     if st.button("🇺🇸"):
         st.session_state.step = 1
-        st.session_state.last_audio_nonce = str(time.time()).replace(".", "") # 生成全新 ID
-        icon = random.choice(ALL_EMOJIS)
+        st.session_state.last_audio_nonce = str(time.time()).replace(".", "")
         
-        try:
-            response = client.chat.completions.create(
-                model="deepseek-chat",
-                messages=[{
-                    "role": "user", 
-                    "content": f"""Based on the symbol '{icon}':
-                    1. STRICTLY FILTER out any content related to politics, gender controversy, LGBTQ+, violence, or adult topics. Return 'SKIP|SKIP|SKIP' if found.
-                    2. Otherwise, randomly pick ONE English word related to this emoji (Noun, Verb, Adjective, or Adverb).
-                    Format: Word|Part of Speech|Chinese Meaning"""
-                }],
-                timeout=8
-            )
-            res = response.choices[0].message.content.strip().split("|")
-            
-            if "SKIP" in res[0] or len(res) < 3:
-                st.rerun()
-            else:
-                st.session_state.current_data = {
-                    "icon": icon, 
-                    "word": res[0].strip(), 
-                    "type": res[1].strip(), 
-                    "cn": res[2].strip()
-                }
-        except:
-            st.error("Network Busy")
+        # 尝试最多 3 次请求
+        max_retries = 3
+        success = False
+        
+        for i in range(max_retries):
+            icon = random.choice(ALL_EMOJIS)
+            try:
+                response = client.chat.completions.create(
+                    model="deepseek-chat",
+                    messages=[{
+                        "role": "user", 
+                        "content": f"Symbol '{icon}': Filter NSFW/Politics/Gender/Violence. Return EnglishWord|PartOfSpeech|ChineseMeaning. Mix Noun/Verb/Adj/Adv."
+                    }],
+                    timeout=5 # 缩短单次超时时间，快进快出
+                )
+                res = response.choices[0].message.content.strip().split("|")
+                
+                if len(res) >= 3 and "SKIP" not in res[0]:
+                    st.session_state.current_data = {
+                        "icon": icon, "word": res[0].strip(), 
+                        "type": res[1].strip(), "cn": res[2].strip()
+                    }
+                    success = True
+                    break
+            except Exception:
+                time.sleep(0.5) # 稍微等半秒再试
+                continue
+        
+        if not success:
+            st.warning("DeepSeek 拥挤中，请再点一次试试 🇺🇸")
 
 # 渲染
 if st.session_state.step >= 1 and st.session_state.current_data:
     data = st.session_state.current_data
     
-    # 展示图标和英文
     st.markdown(f'''
         <div class="result-container">
             <div class="emoji-font">{data["icon"]}</div>
@@ -99,15 +102,12 @@ if st.session_state.step >= 1 and st.session_state.current_data:
         </div>
     ''', unsafe_allow_html=True)
     
-    # --- 修复 Bug 的关键：音频容器 ---
     audio_container = st.empty()
     
     if st.session_state.step == 1:
-        with st.spinner("Loading audio..."):
+        try:
             b64_str = asyncio.run(get_voice_b64(data["word"]))
             nonce = st.session_state.last_audio_nonce
-            
-            # 使用带有唯一 ID 的 HTML，并增加一个自动销毁旧播放器的脚本
             audio_html = f'''
                 <div style="display: flex; justify-content: center;" id="container_{nonce}">
                     <audio controls autoplay id="audio_{nonce}">
@@ -115,19 +115,17 @@ if st.session_state.step >= 1 and st.session_state.current_data:
                     </audio>
                 </div>
                 <script>
-                    // 确保页面上只存在当前的播放器
                     var currentAudio = document.getElementById('audio_{nonce}');
-                    if (currentAudio) {{
-                        currentAudio.play().catch(e => console.log("Audio play blocked"));
-                    }}
+                    if (currentAudio) {{ currentAudio.play().catch(e => {{}}); }}
                 </script>
             '''
             audio_container.markdown(audio_html, unsafe_allow_html=True)
+        except:
+            st.info("语音正在赶来...")
         
         if st.button("Reveal Meaning (显示中文)"):
             st.session_state.step = 2
             st.rerun()
 
-    # 中文展示
     if st.session_state.step == 2:
         st.markdown(f'<div class="result-container"><div class="cn-font">{data["cn"]}</div></div>', unsafe_allow_html=True)
